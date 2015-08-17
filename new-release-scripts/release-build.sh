@@ -140,7 +140,7 @@ if [[ "$1" == "package" ]]; then
 
     export ZINC_PORT=$ZINC_PORT
     echo "Creating distribution: $NAME ($FLAGS)"
-    ./make-distribution.sh --name $NAME --tgz $FLAGS -DzincPort=$ZINC_PORT 2>&1 > \
+    ./make-distribution.sh --name $NAME --mvn $MVN --tgz $FLAGS -DzincPort=$ZINC_PORT 2>&1 > \
       ../binary-release-$NAME.log
     cd ..
     cp spark-$SPARK_VERSION-bin-$NAME/spark-$SPARK_VERSION-bin-$NAME.tgz .
