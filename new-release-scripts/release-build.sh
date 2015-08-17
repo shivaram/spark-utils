@@ -1,4 +1,21 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 
 function exit_with_usage {
   cat << EOF
@@ -59,6 +76,7 @@ NEXUS_ROOT=https://repository.apache.org/service/local/staging
 NEXUS_PROFILE=d63f592e7eac0 # Profile for Spark staging uploads
 BASE_DIR=$(pwd)
 
+MVN="build/mvn --force"
 PUBLISH_PROFILES="-Pyarn -Phive -Phadoop-2.2"
 PUBLISH_PROFILES="$PUBLISH_PROFILES -Pspark-ganglia-lgpl -Pkinesis-asl"
 
@@ -70,7 +88,8 @@ git_hash=`git rev-parse --short HEAD`
 echo "Checked out Spark git hash $git_hash"
 
 if [ -z "$SPARK_VERSION" ]; then
-  SPARK_VERSION=$(mvn help:evaluate -Dexpression=project.version | grep -v INFO | grep -v Download)
+  SPARK_VERSION=$($MVN help:evaluate -Dexpression=project.version \
+    | grep -v INFO | grep -v WARNING | grep -v Download)
 fi
 
 if [ -z "$SPARK_PACKAGE_VERSION" ]; then
@@ -116,7 +135,7 @@ if [[ "$1" == "package" ]]; then
 
     # TODO There should probably be a flag to make-distribution to allow 2.11 support
     if [[ $FLAGS == *scala-2.11* ]]; then
-      ./dev/change-version-to-2.11.sh
+      ./dev/change-scala-version.sh 2.11
     fi
 
     export ZINC_PORT=$ZINC_PORT
@@ -136,6 +155,9 @@ if [[ "$1" == "package" ]]; then
       SHA512 spark-$SPARK_VERSION-bin-$NAME.tgz > \
       spark-$SPARK_VERSION-bin-$NAME.tgz.sha
   }
+
+  # TODO: Check exit codes of children here:
+  # http://stackoverflow.com/questions/1570262/shell-get-exit-code-of-background-process
 
   # We increment the Zinc port each time to avoid OOM's and other craziness if multiple builds
   # share the same Zinc server.
@@ -169,7 +191,7 @@ if [[ "$1" == "docs" ]]; then
   cd docs
   # Compile docs with Java 7 to use nicer format
   # TODO: Make configurable to add this: PRODUCTION=1
-  RELEASE_VERSION="$SPARK_VERSION" jekyll build
+  PRODUCTION=1 RELEASE_VERSION="$SPARK_VERSION" jekyll build
   echo "Copying release documentation to $dest_dir"
   $SSH $USER_HOST mkdir $dest_dir
   echo "Linking /latest to $dest_dir"
@@ -191,15 +213,25 @@ if [[ "$1" == "publish-snapshot" ]]; then
     exit 1
   fi
   # Coerce the requested version
-  build/mvn versions:set -DnewVersion=$SPARK_VERSION
+  $MVN versions:set -DnewVersion=$SPARK_VERSION
   tmp_settings="tmp-settings.xml"
   echo "<settings><servers><server>" > $tmp_settings
   echo "<id>apache.snapshots.https</id><username>$ASF_USERNAME</username>" >> $tmp_settings
   echo "<password>$ASF_PASSWORD</password>" >> $tmp_settings
   echo "</server></servers></settings>" >> $tmp_settings
-  build/mvn --settings $tmp_settings -DskipTests $PUBLISH_PROFILES -Phive-thriftserver deploy
-  ./dev/change-version-to-2.11.sh
-  build/mvn -Dscala-2.11 --settings $tmp_settings -DskipTests $PUBLISH_PROFILES deploy
+
+  # Generate random point for Zinc
+  export ZINC_PORT=$(python -S -c "import random; print random.randrange(3030,4030)")
+
+  $MVN -DzincPort=$ZINC_PORT --settings $tmp_settings -DskipTests $PUBLISH_PROFILES \
+    -Phive-thriftserver deploy
+  ./dev/change-scala-version.sh 2.10
+  $MVN -DzincPort=$ZINC_PORT -Dscala-2.11 --settings $tmp_settings \
+    -DskipTests $PUBLISH_PROFILES deploy
+
+  # Clean-up Zinc nailgun process
+  /usr/sbin/lsof -P |grep $ZINC_PORT | grep LISTEN | awk '{ print $2; }' | xargs kill
+
   rm $tmp_settings
   cd ..
   exit 0
@@ -211,7 +243,7 @@ if [[ "$1" == "publish-release" ]]; then
   echo "Publishing Spark checkout at '$GIT_REF' ($git_hash)"
   echo "Publish version is $SPARK_VERSION"
   # Coerce the requested version
-  build/mvn versions:set -DnewVersion=$SPARK_VERSION
+  $MVN versions:set -DnewVersion=$SPARK_VERSION
 
   # Using Nexus API documented here:
   # https://support.sonatype.com/entries/39720203-Uploading-to-a-Staging-Repository-via-REST-API
@@ -225,12 +257,19 @@ if [[ "$1" == "publish-release" ]]; then
 
   tmp_repo=$(mktemp -d spark-repo-XXXXX)
 
-  build/mvn -Dmaven.repo.local=$tmp_repo -DskipTests $PUBLISH_PROFILES -Phive-thriftserver \
-    clean install
+  # Generate random point for Zinc
+  export ZINC_PORT=$(python -S -c "import random; print random.randrange(3030,4030)")
 
-  ./dev/change-version-to-2.11.sh
+  $MVN -DzincPort=$ZINC_PORT -Dmaven.repo.local=$tmp_repo -DskipTests $PUBLISH_PROFILES \
+    -Phive-thriftserver clean install
 
-  build/mvn -Dmaven.repo.local=$tmp_repo -Dscala-2.11 -DskipTests $PUBLISH_PROFILES clean install
+  ./dev/change-scala-version.sh 2.11
+
+  $MVN -DzincPort=$ZINC_PORT -Dmaven.repo.local=$tmp_repo -Dscala-2.11 \
+    -DskipTests $PUBLISH_PROFILES clean install
+
+  # Clean-up Zinc nailgun process
+  /usr/sbin/lsof -P |grep $ZINC_PORT | grep LISTEN | awk '{ print $2; }' | xargs kill
 
   ./dev/change-version-to-2.10.sh
 
