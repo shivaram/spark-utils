@@ -77,6 +77,8 @@ NEXUS_PROFILE=d63f592e7eac0 # Profile for Spark staging uploads
 BASE_DIR=$(pwd)
 
 MVN="build/mvn --force"
+# Get maven home set by MVN
+MVN_HOME=`$MVN -version 2>&1 | grep 'Maven home' | awk '{print $NF}'`
 PUBLISH_PROFILES="-Pyarn -Phive -Phadoop-2.2"
 PUBLISH_PROFILES="$PUBLISH_PROFILES -Pspark-ganglia-lgpl -Pkinesis-asl"
 
@@ -140,7 +142,7 @@ if [[ "$1" == "package" ]]; then
 
     export ZINC_PORT=$ZINC_PORT
     echo "Creating distribution: $NAME ($FLAGS)"
-    ./make-distribution.sh --name $NAME --mvn $MVN --tgz $FLAGS -DzincPort=$ZINC_PORT 2>&1 > \
+    ./make-distribution.sh --name $NAME --mvn $MVN_HOME/bin/mvn --tgz $FLAGS -DzincPort=$ZINC_PORT 2>&1 > \
       ../binary-release-$NAME.log
     cd ..
     cp spark-$SPARK_VERSION-bin-$NAME/spark-$SPARK_VERSION-bin-$NAME.tgz .
